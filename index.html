@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>物件図面 重複チェックツール</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+  :root {
+    --ink: #1f2430;
+    --sub: #6b7280;
+    --line: #e5e7eb;
+    --pink: #d6336c;        /* 図面枠のピンクを落ち着かせた色 */
+    --pink-soft: #fdf0f5;
+    --paper-yellow: #fff9db; /* 図面の項目欄の黄色 */
+    --ok: #0f766e;
+    --bg: #f7f7f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic Medium", "Noto Sans JP", Meiryo, sans-serif;
+    font-size: 15px; line-height: 1.7;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 32px 20px 64px; }
+  header h1 { font-size: 21px; margin: 0; letter-spacing: .02em; }
+  header h1 .badge {
+    display: inline-block; background: var(--pink); color: #fff; font-size: 12px;
+    padding: 2px 8px; border-radius: 3px; vertical-align: 3px; margin-right: 10px; letter-spacing: .1em;
+  }
+  header p { margin: 6px 0 0; color: var(--sub); font-size: 13px; }
+
+  /* ドロップゾーン：図面の二重ピンク枠をモチーフに */
+  #drop {
+    margin-top: 24px; background: #fff; border: 2px solid var(--pink); border-radius: 6px;
+    box-shadow: inset 0 0 0 4px #fff, inset 0 0 0 5px #f3c3d4;
+    padding: 44px 24px; text-align: center; cursor: pointer; transition: background .15s;
+  }
+  #drop:hover, #drop.over { background: var(--pink-soft); }
+  #drop:focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }
+  #drop .main { font-size: 17px; font-weight: 600; }
+  #drop .hint { color: var(--sub); font-size: 13px; margin-top: 6px; }
+  #fileInput { display: none; }
+
+  #status { margin-top: 14px; font-size: 13px; color: var(--sub); min-height: 1.5em; }
+  #status.err { color: var(--pink); font-weight: 600; }
+
+  /* サマリ */
+  #summary { display: none; margin-top: 28px; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 18px 22px; }
+  #summary .nums { display: flex; gap: 36px; flex-wrap: wrap; }
+  #summary .num b { font-size: 30px; font-variant-numeric: tabular-nums; display: block; line-height: 1.2; }
+  #summary .num span { font-size: 12px; color: var(--sub); }
+  #summary .num.alert b { color: var(--pink); }
+  .btns { margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; }
+  button.dl {
+    font: inherit; font-size: 14px; font-weight: 600; padding: 9px 18px; border-radius: 5px;
+    border: 1px solid var(--pink); background: var(--pink); color: #fff; cursor: pointer;
+  }
+  button.dl.sub { background: #fff; color: var(--pink); }
+  button.dl:hover { opacity: .88; }
+  button.dl:disabled { opacity: .45; cursor: default; }
+  button.dl:focus-visible { outline: 3px solid var(--pink); outline-offset: 2px; }
+  .keepChk { accent-color: var(--pink); width: 15px; height: 15px; vertical-align: -2px; }
+  td.keep label { cursor: pointer; user-select: none; }
+  .mergeRow { margin-top: 16px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .splitLbl { font-size: 14px; color: var(--ink); }
+  #splitN {
+    font: inherit; width: 64px; padding: 6px 8px; margin-left: 6px;
+    border: 1px solid var(--line); border-radius: 5px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  #splitN:focus-visible { outline: 3px solid var(--pink); outline-offset: 1px; }
+  #splitPreview { font-size: 13px; color: var(--sub); font-variant-numeric: tabular-nums; }
+  .btns { margin-top: 10px; }
+
+  /* 重複グループ */
+  #groups { margin-top: 24px; }
+  .gcard { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--pink); border-radius: 4px; padding: 14px 18px; margin-bottom: 12px; }
+  .gcard .gtitle { font-weight: 700; }
+  .gcard .gtitle .gid { color: var(--pink); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .gcard .reason { font-size: 12px; color: var(--sub); margin-left: 8px; }
+  .gcard table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  .gcard th, .gcard td { text-align: left; padding: 5px 10px; border-top: 1px solid var(--line); white-space: nowrap; }
+  .gcard th { color: var(--sub); font-weight: 600; border-top: none; }
+  .gcard td.hl { background: var(--paper-yellow); }
+  .noDup { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--ok); border-radius: 4px; padding: 16px 18px; color: var(--ok); font-weight: 600; display: none; margin-top: 24px; }
+
+  details { margin-top: 20px; }
+  details summary { cursor: pointer; color: var(--sub); font-size: 13px; }
+  #allTableWrap { overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: 4px; margin-top: 10px; }
+  #allTable { border-collapse: collapse; font-size: 12px; width: 100%; }
+  #allTable th, #allTable td { padding: 4px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  #allTable th { background: #fafafa; color: var(--sub); position: sticky; top: 0; }
+  #allTable tr.dup td { background: var(--paper-yellow); }
+
+  footer { margin-top: 40px; font-size: 12px; color: var(--sub); border-top: 1px solid var(--line); padding-top: 14px; }
+  footer ul { margin: 6px 0 0; padding-left: 18px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="badge">社内ツール</span>物件図面 重複チェック</h1>
+    <p>図面PDFを読み込み、同じ建物×同じ部屋番号のページを自動で見つけます。データはこのパソコンの中だけで処理され、どこにも送信されません。</p>
+  </header>
+
+  <div id="drop" tabindex="0" role="button" aria-label="図面PDFを選択">
+    <div class="main">図面PDFをここにドロップ</div>
+    <div class="hint">クリックしてファイルを選ぶこともできます（複数ファイルOK・200ページ以上OK）</div>
+    <input type="file" id="fileInput" accept="application/pdf" multiple>
+  </div>
+  <div id="status"></div>
+
+  <div id="summary">
+    <div class="nums">
+      <div class="num"><b id="nPages">0</b><span>総ページ数</span></div>
+      <div class="num alert"><b id="nGroups">0</b><span>重複グループ</span></div>
+      <div class="num alert"><b id="nDel">0</b><span>削除候補ページ</span></div>
+      <div class="num"><b id="nFail">0</b><span>要目視ページ</span></div>
+    </div>
+    <div class="mergeRow">
+      <button class="dl" id="dlMerged">統合PDFを保存</button>
+      <label class="splitLbl">分割数
+        <input type="number" id="splitN" min="1" value="1" aria-label="分割数">
+      </label>
+      <span id="splitPreview"></span>
+    </div>
+    <div class="btns">
+      <button class="dl sub" id="dlPdf">元ファイルごとに保存</button>
+      <button class="dl sub" id="dlDup">重複のみCSVを保存</button>
+      <button class="dl sub" id="dlAll">全件CSVを保存</button>
+    </div>
+    <p style="font-size:12px;color:var(--sub);margin:10px 0 0">
+      「残す」にチェックしたページだけがPDFに入ります（初期設定＝各グループの最初のページを残す）。<br>
+      <b>統合PDFを保存</b> … 読み込んだ全ファイルを1本にまとめて保存。分割数を2以上にすると、読み込み順のままページ数が均等になるように分けて保存します。<br>
+      <b>元ファイルごとに保存</b> … 統合せず、重複ページを抜いたPDFをファイル単位で保存します。いずれも元のファイルは変更されません。
+    </p>
+  </div>
+
+  <div id="noDup" class="noDup">重複は見つかりませんでした。全ページそのまま入力してOKです。</div>
+  <div id="groups"></div>
+
+  <details id="allDetails" style="display:none">
+    <summary>全ページの抽出結果を表示（黄色の行＝重複）</summary>
+    <div id="allTableWrap"><table id="allTable"></table></div>
+  </details>
+
+  <footer>
+    <b>判定理由の見方</b>
+    <ul>
+      <li><b>物件番号一致</b> … 同じ図面の再掲載。確実に重複（片方削除でOK）</li>
+      <li><b>建物名+部屋一致</b> … 同じ部屋。別会社が同じ部屋を出しているケースも含む（条件を見比べて残す方を選ぶ）</li>
+      <li><b>住所+部屋一致(要確認)</b> … 建物名の表記ゆれの可能性。念のため図面を目視</li>
+    </ul>
+    <p>※「抽出失敗→目視確認」のページは必ず図面を直接確認してください。文字がコピーできないスキャンPDFは読み取れません。<br>
+    ※ 初回起動時のみインターネット接続が必要です（読み取りエンジンの取得のため）。</p>
+  </footer>
+</div>
+
+<script>
+/* =========================================================================
+   コアロジック（Python版 bukken_dup_checker.py と同一の判定。検証済み）
+   図面レイアウトが変わって抽出できなくなったら parsePage() を修正する
+   ========================================================================= */
+
+// pdf.jsの文字断片から「行」を復元（y座標が近いものを1行に、隙間で語を区切る）
+function itemsToLines(items) {
+  const rows = [], TOL = 3;
+  for (const it of items) {
+    const str = it.str || "";
+    if (!str.trim()) continue;
+    const x = it.transform[4], y = it.transform[5];
+    let row = rows.find(r => Math.abs(r.y - y) <= TOL);
+    if (!row) { row = { y, items: [] }; rows.push(row); }
+    row.items.push({ x, w: it.width || 0, str });
+  }
+  rows.sort((a, b) => b.y - a.y);
+  return rows.map(r => {
+    r.items.sort((a, b) => a.x - b.x);
+    let line = "", prevEnd = null;
+    for (const it of r.items) {
+      if (prevEnd !== null && it.x - prevEnd > 2.0) line += " ";
+      line += it.str;
+      prevEnd = it.x + it.w;
+    }
+    return line;
+  });
+}
+
+function normalize(s) { return (s || "").normalize("NFKC").replace(/\s+/g, ""); }
+function stripFurigana(s) { return (s || "").replace(/[（(][^（()）]*[)）]/g, ""); }
+
+// 建物名文字列 → 建物キー・部屋番号（先頭ゼロは比較時に無視）
+function splitBuildingRoom(rawName) {
+  let s = stripFurigana(rawName).normalize("NFKC").trim();
+  while (/\d+\s+\d+$/.test(s)) s = s.replace(/(\d+)\s+(\d+)$/, "$1$2"); // 折返し分断の結合
+  let m = s.match(/[\s　]+([0-9]{2,4}[A-Za-z]?)$/);
+  if (!m) m = s.match(/([0-9]{3,4})$/);
+  let room = "", building = s;
+  if (m) { room = m[1]; building = s.slice(0, m.index).trim(); }
+  const roomKey = room.replace(/^0+/, "") || room;
+  return { building: normalize(building), room, roomKey };
+}
+
+// 図面1ページ分の解析
+function parsePage(lines) {
+  const d = { 建物名: "", 部屋番号: "", 物件番号: "", 賃料: "", 所在地: "", 情報公開日: "" };
+  const text = lines.join("\n");
+  const idx = lines.findIndex(l => l.includes("建物名"));
+  if (idx >= 0) {
+    let name = lines[idx].split("建物名")[1].trim();
+    // 後ろに折返し：「構造・規模」が来るまでの中間行を結合
+    let j = idx + 1;
+    while (j < lines.length && !lines[j].includes("構造・規模")) {
+      const frag = lines[j].replace(/^[建物\s]+/, "").trim();
+      if (frag) name = (name + " " + frag).trim();
+      j++;
+    }
+    // 前に折返し：カッコが閉じだけ／数字のみなら前行を先頭に足す
+    const prev = idx >= 1 ? lines[idx - 1].trim() : "";
+    const open = (name.match(/[（(]/g) || []).length;
+    const close = (name.match(/[）)]/g) || []).length;
+    const digitsOnly = /^[０-９0-9\s]+$/.test(name);
+    const prevIsLabel = /徒歩|バス|停歩|東京都|^[交通建物]$/.test(prev);
+    if ((close > open || digitsOnly) && prev && !prevIsLabel) name = (prev + " " + name).trim();
+    d.建物名 = name;
+  }
+  let m;
+  if ((m = text.match(/物件番号\s*([0-9]{6,})/))) d.物件番号 = m[1];
+  if ((m = text.match(/賃料\s*([0-9,，]+)\s*円/))) d.賃料 = normalize(m[1]) + "円";
+  if ((m = text.match(/((?:東京都|北海道|(?:京都|大阪)府|[^\s]{2,3}県).{2,6}?[市区町村][^\n]{1,30}?)\s*\n/))) d.所在地 = m[1].trim();
+  if ((m = normalize(text).match(/情報公開日[：:]*([0-9]{4}[./][0-9]{2}[./][0-9]{2})/))) d.情報公開日 = m[1];
+  return d;
+}
+
+// 重複判定（物件番号一致／建物名+部屋一致／住所+部屋一致 をUnion-Findでまとめる）
+function detectDuplicates(records) {
+  const keys = new Map();
+  records.forEach((r, i) => {
+    const { building, room, roomKey } = splitBuildingRoom(r.建物名);
+    r.部屋番号 = room; r._建物キー = building; r._部屋キー = roomKey; r._住所キー = normalize(r.所在地);
+    const add = k => { if (!keys.has(k)) keys.set(k, []); keys.get(k).push(i); };
+    if (r.物件番号) add("ID|" + r.物件番号);
+    if (building && roomKey) add("NAME|" + building + "|" + roomKey);
+    if (r._住所キー && roomKey) add("ADDR|" + r._住所キー + "|" + roomKey);
+  });
+  const parent = records.map((_, i) => i);
+  const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[rb] = ra; };
+  const REASON = { ID: "物件番号一致", NAME: "建物名+部屋一致", ADDR: "住所+部屋一致(要確認)" };
+  const reasons = records.map(() => new Set());
+  for (const [k, idxs] of keys) {
+    if (idxs.length < 2) continue;
+    for (let x = 1; x < idxs.length; x++) union(idxs[0], idxs[x]);
+    idxs.forEach(i => reasons[i].add(REASON[k.split("|")[0]]));
+  }
+  const clusters = new Map();
+  records.forEach((_, i) => {
+    const root = find(i);
+    if (!clusters.has(root)) clusters.set(root, []);
+    clusters.get(root).push(i);
+  });
+  let gid = 0;
+  [...clusters.values()].sort((a, b) => a[0] - b[0]).forEach(members => {
+    if (members.length >= 2) {
+      gid++;
+      members.forEach(i => {
+        records[i].重複グループ = "G" + String(gid).padStart(2, "0");
+        records[i].判定理由 = [...reasons[i]].sort().join(" / ");
+      });
+    } else {
+      records[members[0]].重複グループ = ""; records[members[0]].判定理由 = "";
+    }
+  });
+  records.forEach(r => { r.備考 = r.建物名 ? "" : "抽出失敗→目視確認"; });
+  return { records, groupCount: gid };
+}
+
+/* ========================= 画面まわり ========================= */
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const drop = document.getElementById("drop");
+const fileInput = document.getElementById("fileInput");
+const statusEl = document.getElementById("status");
+let lastRecords = [];
+let lastFiles = new Map();
+
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+fileInput.addEventListener("change", () => handleFiles(fileInput.files));
+["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => handleFiles(e.dataTransfer.files));
+
+async function handleFiles(fileList) {
+  const files = [...fileList].filter(f => /\.pdf$/i.test(f.name));
+  if (!files.length) { setStatus("PDFファイルを選んでください", true); return; }
+  setStatus("読み込み中…");
+  const records = [];
+  try {
+    for (const file of files) {
+      const buf = await file.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      for (let p = 1; p <= doc.numPages; p++) {
+        const page = await doc.getPage(p);
+        const tc = await page.getTextContent();
+        const rec = parsePage(itemsToLines(tc.items));
+        rec.ファイル = file.name; rec.ページ = p;
+        records.push(rec);
+        if (p % 10 === 0 || p === doc.numPages) {
+          setStatus(`読み込み中… ${file.name} ${p}/${doc.numPages} ページ`);
+          await new Promise(r => setTimeout(r)); // 画面更新のための小休止
+        }
+      }
+      doc.destroy();
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus("読み込みに失敗しました。PDFが壊れていないか確認してください（" + err.message + "）", true);
+    return;
+  }
+  const { groupCount } = detectDuplicates(records);
+  records.forEach((r, i) => { r._idx = i; });
+  lastRecords = records;
+  lastFiles = new Map(files.map(f => [f.name, f])); // PDF再構成用に元ファイルを保持
+  render(records, groupCount, files.length > 1);
+  fileInput.value = "";
+}
+
+function setStatus(msg, isErr) {
+  statusEl.textContent = msg;
+  statusEl.className = isErr ? "err" : "";
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function render(records, groupCount, multiFile) {
+  const dups = records.filter(r => r.重複グループ);
+  const fails = records.filter(r => r.備考);
+  document.getElementById("summary").style.display = "block";
+  document.getElementById("nPages").textContent = records.length;
+  document.getElementById("nGroups").textContent = groupCount;
+  document.getElementById("nDel").textContent = Math.max(0, dups.length - groupCount);
+  document.getElementById("nFail").textContent = fails.length;
+  document.getElementById("noDup").style.display = groupCount === 0 ? "block" : "none";
+
+  const pageLabel = r => (multiFile ? r.ファイル + " " : "") + "P" + r.ページ;
+
+  // 重複グループのカード
+  const gEl = document.getElementById("groups");
+  gEl.innerHTML = "";
+  const gids = [...new Set(dups.map(r => r.重複グループ))].sort();
+  for (const g of gids) {
+    const ms = dups.filter(r => r.重複グループ === g);
+    const rows = ms.map((r, k) =>
+      `<tr><td class="keep"><label><input type="checkbox" class="keepChk" data-idx="${r._idx}"${k === 0 ? " checked" : ""}> 残す</label></td>` +
+      `<td class="hl">${esc(pageLabel(r))}</td><td>${esc(r.建物名)}</td><td>${esc(r.部屋番号)}</td>` +
+      `<td>${esc(r.賃料)}</td><td>${esc(r.物件番号)}</td><td>${esc(r.情報公開日)}</td></tr>`).join("");
+    gEl.insertAdjacentHTML("beforeend",
+      `<div class="gcard"><div class="gtitle"><span class="gid">${g}</span>${esc(ms[0].建物名)}` +
+      `<span class="reason">${esc(ms[0].判定理由)}</span></div>` +
+      `<table><tr><th>残す</th><th>ページ</th><th>建物名</th><th>部屋</th><th>賃料</th><th>物件番号</th><th>公開日</th></tr>${rows}</table></div>`);
+  }
+  updateDelCount();
+
+  // 全件テーブル
+  document.getElementById("allDetails").style.display = "block";
+  const cols = ["ページ", "建物名", "部屋番号", "物件番号", "賃料", "所在地", "情報公開日", "重複グループ", "判定理由", "備考"];
+  let html = "<tr>" + cols.map(c => `<th>${c}</th>`).join("") + "</tr>";
+  for (const r of records) {
+    html += `<tr class="${r.重複グループ ? "dup" : ""}">` +
+      cols.map(c => `<td>${esc(c === "ページ" ? pageLabel(r) : (r[c] || ""))}</td>`).join("") + "</tr>";
+  }
+  document.getElementById("allTable").innerHTML = html;
+
+  setStatus(`完了：${records.length}ページ中、重複 ${groupCount} グループを検出しました`);
+  document.getElementById("summary").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// CSV出力（UTF-8 BOM付き＝Excelでそのまま開ける）
+function toCsv(rows, multiFile) {
+  const cols = [...(multiFile ? ["ファイル"] : []), "ページ", "建物名", "部屋番号", "物件番号", "賃料", "所在地", "情報公開日", "重複グループ", "判定理由", "備考"];
+  const q = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  return "\uFEFF" + cols.map(q).join(",") + "\r\n" +
+    rows.map(r => cols.map(c => q(r[c])).join(",")).join("\r\n");
+}
+function download(name, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+document.getElementById("dlAll").addEventListener("click", () => {
+  const multi = new Set(lastRecords.map(r => r.ファイル)).size > 1;
+  download("重複チェック結果_全件.csv", toCsv(lastRecords, multi));
+});
+document.getElementById("dlDup").addEventListener("click", () => {
+  const multi = new Set(lastRecords.map(r => r.ファイル)).size > 1;
+  const dups = lastRecords.filter(r => r.重複グループ)
+    .sort((a, b) => a.重複グループ.localeCompare(b.重複グループ) || a.ページ - b.ページ);
+  download("重複チェック結果_重複のみ.csv", toCsv(dups, multi));
+});
+
+/* ---- 重複を除いたPDFの生成（pdf-lib使用。元ファイルは変更しない）---- */
+
+// 「残す」チェックの状態から削除ページ数を数えてボタン表示に反映
+function updateDelCount() {
+  const n = [...document.querySelectorAll(".keepChk")].filter(c => !c.checked).length;
+  const btn = document.getElementById("dlPdf");
+  btn.textContent = n ? `元ファイルごとに保存（${n}ページ削除）` : "元ファイルごとに保存";
+  btn.disabled = n === 0;
+  updateSplitPreview();
+}
+document.getElementById("groups").addEventListener("change", e => {
+  if (e.target.classList.contains("keepChk")) updateDelCount();
+});
+
+/* ---- 統合・分割 ---- */
+
+// 削除対象（チェックが外れているページ）のindex集合
+function getDeleteSet() {
+  const del = new Set();
+  document.querySelectorAll(".keepChk").forEach(c => { if (!c.checked) del.add(+c.dataset.idx); });
+  return del;
+}
+
+// N個にできるだけ均等に分割（先頭側に余りを配る）例: 79件を3分割→27,26,26
+function evenChunks(arr, n) {
+  const base = Math.floor(arr.length / n), rem = arr.length % n;
+  const out = []; let pos = 0;
+  for (let i = 0; i < n; i++) {
+    const size = base + (i < rem ? 1 : 0);
+    out.push(arr.slice(pos, pos + size)); pos += size;
+  }
+  return out;
+}
+
+// 分割数入力に応じて「394ページ → 5ファイル（79/79/79/79/78）」をライブ表示
+function updateSplitPreview() {
+  const el = document.getElementById("splitPreview");
+  if (!lastRecords.length) { el.textContent = ""; return; }
+  const del = getDeleteSet();
+  const keptCount = lastRecords.length - del.size;
+  const input = document.getElementById("splitN");
+  let n = Math.floor(+input.value) || 1;
+  n = Math.max(1, Math.min(n, keptCount)); // 1〜残ページ数に収める
+  const sizes = evenChunks([...Array(keptCount).keys()], n).map(c => c.length);
+  el.textContent = n === 1
+    ? `重複除外後 ${keptCount}ページ → 1ファイル`
+    : `重複除外後 ${keptCount}ページ → ${n}ファイル（${sizes.join(" / ")}ページ）`;
+}
+document.getElementById("splitN").addEventListener("input", updateSplitPreview);
+
+// 統合PDFを保存（分割数に応じてN本に分けて保存）
+document.getElementById("dlMerged").addEventListener("click", async () => {
+  if (!lastRecords.length) return;
+  const del = getDeleteSet();
+  const kept = lastRecords.filter((r, i) => !del.has(i)); // 読み込み順のまま
+  if (!kept.length) { setStatus("残すページがありません", true); return; }
+  let n = Math.floor(+document.getElementById("splitN").value) || 1;
+  n = Math.max(1, Math.min(n, kept.length));
+  setStatus("統合PDFを作成中…");
+  try {
+    // 元ファイルは1回だけ読み込んでキャッシュ（分割数が多くても速い）
+    const srcDocs = new Map();
+    for (const [name, file] of lastFiles) {
+      srcDocs.set(name, await PDFLib.PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true }));
+    }
+    const chunks = evenChunks(kept, n);
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    for (let i = 0; i < chunks.length; i++) {
+      setStatus(`統合PDFを作成中… ${i + 1}/${chunks.length} ファイル目`);
+      const out = await PDFLib.PDFDocument.create();
+      for (const r of chunks[i]) {
+        const [pg] = await out.copyPages(srcDocs.get(r.ファイル), [r.ページ - 1]);
+        out.addPage(pg);
+      }
+      const bytes = await out.save();
+      // 保存名: 本日の日付 + 資料001, 資料002, … （例: 20260718_資料001.pdf）
+      const name = `${stamp}_資料${String(i + 1).padStart(3, "0")}.pdf`;
+      downloadBlob(name, new Blob([bytes], { type: "application/pdf" }));
+      await new Promise(r => setTimeout(r, 400)); // 連続ダウンロードのブロック回避
+    }
+    setStatus(`完了：${kept.length}ページを${n}ファイルに${n === 1 ? "統合" : "分割"}して保存しました` +
+      (del.size ? `（重複${del.size}ページを除外）` : ""));
+  } catch (err) {
+    console.error(err);
+    setStatus("統合PDFの作成に失敗しました（" + err.message + "）。パスワード付きPDFの可能性があります", true);
+  }
+});
+
+function downloadBlob(name, blob) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+document.getElementById("dlPdf").addEventListener("click", async () => {
+  // チェックが外れているページ = 削除対象
+  const del = getDeleteSet();
+  if (!del.size) { setStatus("削除するページがありません（すべて「残す」になっています）"); return; }
+  setStatus("PDFを作成中…");
+  try {
+    // ファイルごとに削除ページをまとめる（複数ファイル読込時はファイル単位で出力）
+    const delByFile = new Map();
+    lastRecords.forEach((r, i) => {
+      if (!delByFile.has(r.ファイル)) delByFile.set(r.ファイル, []);
+      if (del.has(i)) delByFile.get(r.ファイル).push(r.ページ - 1);
+    });
+    let saved = 0;
+    for (const [name, delPages] of delByFile) {
+      if (!delPages.length) continue; // 削除がないファイルはそのまま使えばよいので出力しない
+      const file = lastFiles.get(name);
+      const src = await PDFLib.PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+      const out = await PDFLib.PDFDocument.create();
+      const keep = [...Array(src.getPageCount()).keys()].filter(p => !delPages.includes(p));
+      (await out.copyPages(src, keep)).forEach(pg => out.addPage(pg));
+      const bytes = await out.save();
+      downloadBlob(name.replace(/\.pdf$/i, "") + "_重複除外済.pdf",
+        new Blob([bytes], { type: "application/pdf" }));
+      saved++;
+      await new Promise(r => setTimeout(r, 400)); // 連続ダウンロードのブロック回避
+    }
+    const skipped = [...delByFile.values()].filter(d => !d.length).length;
+    setStatus(`完了：${del.size}ページを削除したPDFを保存しました（${saved}ファイル）` +
+      (skipped ? `。削除のなかった${skipped}ファイルは元のままお使いください` : ""));
+  } catch (err) {
+    console.error(err);
+    setStatus("PDFの作成に失敗しました（" + err.message + "）。パスワード付きPDFの可能性があります", true);
+  }
+});
+</script>
+</body>
+</html>
